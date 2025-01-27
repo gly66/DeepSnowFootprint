@@ -1,38 +1,43 @@
 using System;
 using UnityEngine;
+using UnityEngine.UI; // 导入 Unity UI 系统
 
 namespace UnityStandardAssets.Utility
 {
     public class SimpleActivatorMenu : MonoBehaviour
     {
-        // An incredibly simple menu which, when given references
-        // to gameobjects in the scene
-        public GUIText camSwitchButton;
+        // 用 UI.Text 替代 GUIText
+        public Text camSwitchButton;
         public GameObject[] objects;
-
 
         private int m_CurrentActiveObject;
 
-
         private void OnEnable()
         {
-            // active object starts from first in array
+            // 激活的对象从数组中的第一个开始
             m_CurrentActiveObject = 0;
-            camSwitchButton.text = objects[m_CurrentActiveObject].name;
+            UpdateCameraSwitchButton();
         }
-
 
         public void NextCamera()
         {
-            int nextactiveobject = m_CurrentActiveObject + 1 >= objects.Length ? 0 : m_CurrentActiveObject + 1;
+            int nextActiveObject = m_CurrentActiveObject + 1 >= objects.Length ? 0 : m_CurrentActiveObject + 1;
 
             for (int i = 0; i < objects.Length; i++)
             {
-                objects[i].SetActive(i == nextactiveobject);
+                objects[i].SetActive(i == nextActiveObject);
             }
 
-            m_CurrentActiveObject = nextactiveobject;
-            camSwitchButton.text = objects[m_CurrentActiveObject].name;
+            m_CurrentActiveObject = nextActiveObject;
+            UpdateCameraSwitchButton();
+        }
+
+        private void UpdateCameraSwitchButton()
+        {
+            if (camSwitchButton != null && m_CurrentActiveObject >= 0 && m_CurrentActiveObject < objects.Length)
+            {
+                camSwitchButton.text = objects[m_CurrentActiveObject].name;
+            }
         }
     }
 }

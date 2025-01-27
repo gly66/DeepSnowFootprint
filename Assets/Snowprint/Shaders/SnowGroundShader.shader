@@ -1,4 +1,6 @@
-﻿Shader "Custom/snow_ground"
+﻿// Upgrade NOTE: replaced 'mul(UNITY_MATRIX_MVP,*)' with 'UnityObjectToClipPos(*)'
+
+Shader "Custom/snow_ground"
 {
 	Properties
 	{
@@ -8,6 +10,10 @@
 		_Color("Color", color) = (1,1,1,0)
 		_SpecPow("Metallic", Range(0, 1)) = 0.5
 		_GlossPow("Smoothness", Range(0, 1)) = 0.5
+
+		_HeightMap ("Height Map", 2D) = "white" {}
+		_BlurSize ("Blur Size", Float) = 0.01
+        _HeightMultiplier ("Height Multiplier", Float) = 1.0
 
 		_DistanceFiled("DistanceField",2D) = "black"{}
 		_CoverSize("CoverSize",float) = 10.0
@@ -20,6 +26,8 @@
 		_DispOffset("Disp Offset", Range(0, 1)) = 0.5
 		_MinEdgeLength("Minimum Edge length", Range(0.01,1)) = 0.1
 		_TextureWorldSize("Texture Size in world", Range(0.1,10)) = 0.5
+
+		_CameraPosition("CameraPosition", Vector) = (20, 5, 20)
 
 	}
 
@@ -85,10 +93,11 @@
 				float2 texcoord2 : TEXCOORD2;
 
 			};
-
+			// hull shader vertex input
 			struct HS_INPUT
 			{
 				float4 vertex : INTERNALTESSPOS;
+				float4 pos : POSITION;
 				float4 tangent : TANGENT;
 				float3 normal : NORMAL;
 				float2 texcoord : TEXCOORD0;
@@ -97,13 +106,13 @@
 				float3 worldPos : TEXCOORD3;
 				float distanceData : TEXCOORD4;
 			};
-
+			// hull constant shader ouput(tessellation factors)
 			struct HS_PER_PATCH_OUTPUT
 			{
 				float edges[3]  : SV_TessFactor;
 				float inside : SV_InsideTessFactor;
 			};
-
+			// domain shader vertex input
 			struct DS_INPUT
 			{
 				float4 vertex : INTERNALTESSPOS;
@@ -114,7 +123,7 @@
 				float2 texcoord2 : TEXCOORD2;
 				float3 worldPos : TEXCOORD3;
 			};
-
+			// geometry shader vertex input
 			struct GS_INPUT
 			{
 				float4 vertex : POSITION;
@@ -153,12 +162,15 @@
 			sampler2D _DistanceFiled;
 			float _CoverSize;
 			float4 _AnchorPoint;
-			///Vertex Shader
+			float3 _CameraPosition;
+
+			/// Vertex Shader
 			HS_INPUT vs(appdata i)
 			{
 				HS_INPUT o;
 
 				o.vertex = i.vertex;
+				o.pos = UnityObjectToClipPos(o.vertex);
 				o.tangent = i.tangent;
 				o.normal = i.normal;
 				o.texcoord = i.texcoord;
@@ -176,34 +188,52 @@
 
 			float _MinEdgeLength;
 			float _TextureWorldSize;
+			// Edge length in clip space
+			float edgeLength(float4 v1, float4 v2)
+			{
+				
+				float2 p1 = v1.xyz / v1.w; 
+				float2 p2 = v2.xyz / v2.w;
+    
+				return length(p1 - p2);
+			}
+			//  Tessellation Factor
+			float tessellationFactor(float edge1, float edge2, float edge3, float screenSize)
+			{
+				float targetLength = 0.03 * screenSize; // screen size 3%
+				return max(max(edge1 / targetLength, edge2 / targetLength), edge3 / targetLength);
+			}
 
-			// tessellation hull constant shader
+			// tessellation hull constant shader, calculate the tessllation factors.
 			HS_PER_PATCH_OUTPUT hsconst(InputPatch<HS_INPUT,3> v) {
 				HS_PER_PATCH_OUTPUT o;
 				float3 worldPos0 = mul(unity_ObjectToWorld, v[0].vertex).xyz;
 				float3 worldPos1 = mul(unity_ObjectToWorld, v[1].vertex).xyz;
 				float3 worldPos2 = mul(unity_ObjectToWorld, v[2].vertex).xyz;
-				float factor0 = distance(worldPos1, worldPos2) / _MinEdgeLength;
-				float factor1 = distance(worldPos2, worldPos0) / _MinEdgeLength;
-				float factor2 = distance(worldPos0, worldPos1) / _MinEdgeLength;
-				factor0 *= step(v[0].distanceData, DISTANCE_RANGE);
-				factor1 *= step(v[1].distanceData, DISTANCE_RANGE);
-				factor2 *= step(v[2].distanceData, DISTANCE_RANGE);
-				float factor = max(1.f,(factor0 + factor1 + factor2) / 3.f);
-				o.edges[0] = factor;
-				o.edges[1] = factor;
-				o.edges[2] = factor;
-				o.inside = (o.edges[0] + o.edges[1] + o.edges[2]) / 3;
+	
+
+				float factor0 = edgeLength(v[1].pos, v[2].pos) * _ScreenParams.y *0.03;
+				float factor1 = edgeLength(v[2].pos, v[0].pos) * _ScreenParams.y *0.03;
+				float factor2 = edgeLength(v[0].pos, v[1].pos) * _ScreenParams.y *0.03;
+				//float factor = max(1.f,(factor0 + factor1 + factor2) / 3.f);
+	
+				//float distanceToCamera = distance(_CameraPosition, (worldPos0 + worldPos1) * 0.5) * 0.1;
+				// Decide how many segments the edge is divided into
+				o.edges[0] = factor0 ;
+				o.edges[1] = factor1 ;
+				o.edges[2] = factor2 ;
+				o.inside = (o.edges[0] + o.edges[1] + o.edges[2]) / 3; // The number of interior vertices generated is approximately related to the square of inside
 				return o;
 			}
+			
+			// here is a tessellator!
+
 			// tessellation hull shader
-			[UNITY_domain("tri")]
-			[UNITY_partitioning("integer")]
-			[UNITY_outputtopology("triangle_cw")]
-			[UNITY_patchconstantfunc("hsconst")]
-			[UNITY_outputcontrolpoints(3)]
-
-
+			[UNITY_domain("tri")] // Signal we're inputting triangles
+			[UNITY_partitioning("integer")] // Select a partitioning mode: integer, fractional_odd, fractional_even or pow2
+			[UNITY_outputtopology("triangle_cw")] // Signal we're outputting triangle
+			[UNITY_patchconstantfunc("hsconst")] // Register the patch constant function
+			[UNITY_outputcontrolpoints(3)] // Triangles have three points
 
 			DS_INPUT hs(InputPatch<HS_INPUT, 3> i, uint pointID : SV_OutputControlPointID, uint PatchID : SV_PrimitiveID)
 			{
@@ -218,11 +248,30 @@
 				return o;
 			}
 
-
+			sampler2D _HeightMap;
+			float _BlurSize;
+			float _HeightMultiplier;
 			sampler2D _DispTex;
 			float _Displacement;
 			float _DispOffset;
 
+			float CalculateHeight(float2 uv)
+			{
+				float mean_height = 0.0;
+
+				// Sampling a 3x3 area for height averaging
+				for (int i = -1; i <= 1; i++)
+				{
+					for (int j = -1; j <= 1; j++)
+					{
+						float2 offset = float2(i, j) * _BlurSize;
+						float4 uv_lod = float4(uv + offset, 0, 0); // LOD = 0
+						mean_height += tex2Dlod(_HeightMap, uv_lod).r;
+					}
+				}
+				mean_height /= 9.0;
+				return saturate(mean_height) * _HeightMultiplier;
+			}
 
 			[domain("tri")]
 			GS_INPUT ds(HS_PER_PATCH_OUTPUT i,const OutputPatch<DS_INPUT, 3> vi, float3 bary : SV_DomainLocation)
@@ -257,6 +306,8 @@
 				//sample the height map
 				float d = (tex2Dlod(_DispTex, float4(heightUV, 0, 0)).r - 0.5)* displaceAmount + _DispOffset;
 				o.vertex.y += d; //displace along the y direction
+				float heightPos = CalculateHeight(o.uv);
+				
 
 
 				//reconstruct the normal and tangent value
@@ -313,9 +364,9 @@
 				for(int i = 0; i < 3; i++)
 				{  
 					//apply model view projection 
-					o[i].vertex = mul(UNITY_MATRIX_MVP,input[i].vertex);  
+					o[i].vertex = UnityObjectToClipPos(input[i].vertex);  
 					o[i].uv = input[i].uv;
-					o[i].detailuv =input[i].detailuv * discardFactor;
+					o[i].detailuv =input[i].detailuv * 1;
 					o[i].tspace0 = input[i].tspace0;
 					o[i].tspace1 = input[i].tspace1;
 					o[i].tspace2 = input[i].tspace2;
@@ -435,6 +486,6 @@
 		}
 	}
 
-	FallBack "Diffuse"
+	//FallBack "Diffuse"
 
 }
